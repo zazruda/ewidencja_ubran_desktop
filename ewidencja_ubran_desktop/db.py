@@ -1,5 +1,6 @@
 import sqlite3
 from pathlib import Path
+from contextlib import contextmanager
 
 DB_PATH = Path.home() / "EwidencjaUbran" / "ewidencja.db"
 
@@ -61,6 +62,14 @@ CREATE TABLE IF NOT EXISTS movements (
     FOREIGN KEY(item_id) REFERENCES items(id),
     FOREIGN KEY(employee_id) REFERENCES employees(id)
 );
+
+-- Indexes to speed up common queries
+CREATE INDEX IF NOT EXISTS idx_items_stock_min ON items(stock, min_stock);
+CREATE INDEX IF NOT EXISTS idx_items_inv ON items(inv_number);
+CREATE INDEX IF NOT EXISTS idx_employees_active ON employees(active);
+CREATE INDEX IF NOT EXISTS idx_issues_status ON issues(status);
+CREATE INDEX IF NOT EXISTS idx_issues_employee ON issues(employee_id);
+CREATE INDEX IF NOT EXISTS idx_movements_item_date ON movements(item_id, move_date);
 """
 
 def get_conn():
@@ -85,3 +94,21 @@ def execute(sql, params=()):
         cur = conn.execute(sql, params)
         conn.commit()
         return cur.lastrowid
+
+@contextmanager
+def transaction():
+    """Context manager for a single-connection transaction.
+    Usage:
+        with transaction() as conn:
+            conn.execute("INSERT ...")
+            conn.execute("UPDATE ...")
+    """
+    conn = get_conn()
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()

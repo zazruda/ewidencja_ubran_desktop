@@ -30,6 +30,131 @@ class App(tk.Tk):
         nb.add(self.issue, text="Wydanie / Zwrot")
         nb.add(self.stock, text="Stany i braki")
 
+
+class EmployeeCard(tk.Toplevel):
+    def __init__(self, master, emp_id: int):
+        super().__init__(master)
+        self.emp_id = emp_id
+        self.title(f"Karta pracownika #{emp_id}")
+        self.geometry("760x520")
+        self.resizable(True, True)
+
+        # Vars
+        self.v_name = tk.StringVar()
+        self.v_department = tk.StringVar()
+        self.v_position = tk.StringVar()
+        self.v_email = tk.StringVar()
+        self.v_phone = tk.StringVar()
+        self.v_active = tk.BooleanVar(value=True)
+
+        nb = ttk.Notebook(self)
+        nb.pack(fill="both", expand=True)
+
+        # Dane
+        frm = ttk.Frame(nb)
+        nb.add(frm, text="Dane")
+        fields = [
+            ("Imi i nazwisko", self.v_name),
+            ("Dzia", self.v_department),
+            ("Stanowisko", self.v_position),
+            ("Email", self.v_email),
+            ("Telefon", self.v_phone),
+        ]
+        for i, (label, var) in enumerate(fields):
+            ttk.Label(frm, text=label).grid(row=i, column=0, sticky="e", padx=6, pady=4)
+            ttk.Entry(frm, textvariable=var, width=40).grid(row=i, column=1, sticky="w", padx=6, pady=4)
+        ttk.Checkbutton(frm, text="Aktywny", variable=self.v_active).grid(row=0, column=2, padx=6)
+        box = ttk.Frame(frm); box.grid(row=0, column=3, rowspan=3, padx=6, pady=4, sticky="n")
+        ttk.Button(box, text="Zapisz", command=self.save).pack(fill="x", pady=2)
+        ttk.Button(box, text="Wydaj ubranie", command=self.quick_issue).pack(fill="x", pady=2)
+
+        self.lbl_summary = ttk.Label(frm, text="")
+        self.lbl_summary.grid(row=len(fields), column=0, columnspan=4, sticky="w", padx=6, pady=8)
+
+        # Wydane (otwarte)
+        frm_open = ttk.Frame(nb); nb.add(frm_open, text="Wydane (otwarte)")
+        self.tree_open = ttk.Treeview(frm_open, columns=("id","date","item","inv","qty"), show="headings", height=12)
+        for col, txt, w in [("id","ID",60),("date","Data",150),("item","Ubranie",240),("inv","Nr ewid.",110),("qty","Ilo",60)]:
+            self.tree_open.heading(col, text=txt); self.tree_open.column(col, width=w, anchor="w")
+        self.tree_open.pack(fill="both", expand=True, padx=8, pady=8)
+
+        # Historia ruchw
+        frm_hist = ttk.Frame(nb); nb.add(frm_hist, text="Historia ruchw")
+        self.tree_hist = ttk.Treeview(frm_hist, columns=("date","type","item","inv","qty","note"), show="headings", height=12)
+        for col, txt, w in [("date","Data",150),("type","Typ",90),("item","Ubranie",240),("inv","Nr ewid.",110),("qty","Ilo",60),("note","Notatka",220)]:
+            self.tree_hist.heading(col, text=txt); self.tree_hist.column(col, width=w, anchor="w")
+        self.tree_hist.pack(fill="both", expand=True, padx=8, pady=8)
+
+        self.load()
+
+    def load(self):
+        rows = query("SELECT * FROM employees WHERE id = ?", (self.emp_id,))
+        if not rows:
+            messagebox.showerror("Karta", "Nie znaleziono pracownika."); self.destroy(); return
+        r = rows[0]
+        self.v_name.set(r["name"] or "")
+        self.v_department.set(r["department"] or "")
+        self.v_position.set(r["position"] or "")
+        self.v_email.set(r["email"] or "")
+        self.v_phone.set(r["phone"] or "")
+        self.v_active.set(bool(r["active"]))
+
+        open_rows = query(
+            """
+            SELECT i.id, i.issue_date, it.name as item, it.inv_number, i.qty
+            FROM issues i
+            JOIN items it ON it.id = i.item_id
+            WHERE i.employee_id = ? AND i.status = 'Wydane'
+            ORDER BY i.id DESC
+            """, (self.emp_id,))
+        for i in self.tree_open.get_children(): self.tree_open.delete(i)
+        for rr in open_rows:
+            self.tree_open.insert("", "end", values=(rr["id"], rr["issue_date"], rr["item"], rr["inv_number"] or "", rr["qty"]))
+
+        hist_rows = query(
+            """
+            SELECT m.move_date, m.move_type, it.name as item, it.inv_number, m.qty, m.note
+            FROM movements m
+            LEFT JOIN items it ON it.id = m.item_id
+            WHERE m.employee_id = ?
+            ORDER BY m.id DESC
+            """, (self.emp_id,))
+        for i in self.tree_hist.get_children(): self.tree_hist.delete(i)
+        for rr in hist_rows:
+            self.tree_hist.insert("", "end", values=(rr["move_date"], rr["move_type"], rr["item"] or "", rr["inv_number"] or "", rr["qty"], rr["note"] or ""))
+
+        self.lbl_summary.configure(text=f"Otwarte wydania: {len(open_rows)} | Aktywny: {'Tak' if self.v_active.get() else 'Nie'}")
+
+    def save(self):
+        name = self.v_name.get().strip()
+        if not name:
+            messagebox.showwarning("Dane", "Imi i nazwisko nie moe by7 puste."); return
+        execute(
+            "UPDATE employees SET name=?, department=?, position=?, email=?, phone=?, active=? WHERE id=?",
+            (name,
+             self.v_department.get().strip(),
+             self.v_position.get().strip(),
+             self.v_email.get().strip(),
+             self.v_phone.get().strip(),
+             1 if self.v_active.get() else 0,
+             self.emp_id)
+        )
+        messagebox.showinfo("Zapis", "Zapisano zmiany.")
+        self.load()
+        try:
+            self.master.emp.load()
+            self.master.issue.refresh_lists()
+        except Exception:
+            pass
+
+    def quick_issue(self):
+        try:
+            app = self.master  # App
+            app.issue.select_employee_by_id(self.emp_id)
+            app.issue.emp_combo.focus_set()
+        except Exception:
+            pass
+
 class EmployeesFrame(ttk.Frame):
     def __init__(self, parent):
         super().__init__(parent)
@@ -69,6 +194,16 @@ class EmployeesFrame(ttk.Frame):
             self.tree.heading(col, text=txt)
             self.tree.column(col, width=w, anchor="w")
         self.tree.pack(fill="both", expand=True, padx=10, pady=5)
+        # Double click to open card
+        self.tree.bind("<Double-1>", self.on_tree_double)
+        # Context menu
+        self.menu = tk.Menu(self, tearoff=0)
+        self.menu.add_command(label="Otwrz kart", command=self.open_selected_card)
+        self.menu.add_command(label="Kopiuj email", command=lambda: self.copy_from_selected(5))
+        self.menu.add_command(label="Kopiuj telefon", command=lambda: self.copy_from_selected(6))
+        self.menu.add_separator()
+        self.menu.add_command(label="Aktywuj/Dezaktywuj", command=self.toggle_active_selected)
+        self.tree.bind("<Button-3>", self.on_right_click)
         self.load()
 
     def add_emp(self):
@@ -93,6 +228,68 @@ class EmployeesFrame(ttk.Frame):
             self.tree.insert("", "end", values=(r["id"], r["name"], r["department"],
                                                 r["position"], "Tak" if r["active"] else "Nie",
                                                 r["email"], r["phone"]))
+
+    def get_selected_employee_id(self):
+        sel = self.tree.selection()
+        if not sel:
+            return None
+        vals = self.tree.item(sel[0]).get("values")
+        if not vals:
+            return None
+        try:
+            return int(vals[0])
+        except Exception:
+            return None
+
+    def open_selected_card(self):
+        emp_id = self.get_selected_employee_id()
+        if not emp_id:
+            messagebox.showwarning("Wybr", "Zaznacz pracownika z listy.")
+            return
+        EmployeeCard(self.winfo_toplevel(), emp_id)
+
+    def on_tree_double(self, event):
+        try:
+            iid = self.tree.identify_row(event.y)
+            if iid:
+                self.tree.selection_set(iid)
+                self.open_selected_card()
+        except Exception:
+            pass
+
+    def on_right_click(self, event):
+        try:
+            iid = self.tree.identify_row(event.y)
+            if iid:
+                self.tree.selection_set(iid)
+            self.menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            try:
+                self.menu.grab_release()
+            except Exception:
+                pass
+
+    def copy_from_selected(self, idx):
+        sel = self.tree.selection()
+        if not sel:
+            return
+        vals = self.tree.item(sel[0]).get("values")
+        try:
+            v = str(vals[idx]) if idx < len(vals) else ""
+            self.clipboard_clear(); self.clipboard_append(v)
+        except Exception:
+            pass
+
+    def toggle_active_selected(self):
+        emp_id = self.get_selected_employee_id()
+        if not emp_id:
+            return
+        row = query("SELECT active FROM employees WHERE id = ?", (emp_id,))
+        if not row:
+            return
+        new_val = 0 if row[0]["active"] else 1
+        execute("UPDATE employees SET active = ? WHERE id = ?", (new_val, emp_id))
+        self.load()
 
 class ItemsFrame(ttk.Frame):
     def __init__(self, parent):
@@ -223,6 +420,14 @@ class IssueFrame(ttk.Frame):
         self.emp_combo["values"] = list(self.emp_map.keys())
         if emps and not self.emp_combo.get():
             self.emp_combo.current(0)
+
+    def select_employee_by_id(self, emp_id: int):
+        # odw listy i ustaw wybranego pracownika
+        self.refresh_lists()
+        for display, val in self.emp_map.items():
+            if val == emp_id:
+                self.emp_combo.set(display)
+                break
 
     def load_open(self):
         for i in self.tree.get_children(): self.tree.delete(i)
